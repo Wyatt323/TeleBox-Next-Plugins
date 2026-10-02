@@ -6,14 +6,21 @@ type Message = any;
 const getNextClient = async (msg?: Message): Promise<any> =>
   msg?.client ?? (await getGlobalClient());
 
+const resolveChatId = (msg: Message): any =>
+  msg?.chat ?? msg?.chatId ?? msg?.peerId;
+
 /** Next messages are plain objects; deletion is a client operation. */
 const deleteMessageCompat = async (msg: Message): Promise<void> => {
   try {
     const client = await getNextClient(msg);
-    const peer = msg?.chatId ?? msg?.peerId;
+    const peer = resolveChatId(msg);
     const id = Number(msg?.id);
-    if (peer != null && Number.isFinite(id) && typeof client.deleteMessages === "function") {
-      await client.deleteMessages(peer, [id], { revoke: true });
+    if (peer != null && Number.isFinite(id)) {
+      if (typeof client.deleteMessagesById === "function") {
+        await client.deleteMessagesById(peer, [id], { revoke: true });
+      } else if (typeof client.deleteMessages === "function") {
+        await client.deleteMessages([msg], { revoke: true });
+      }
     }
   } catch {
     /* best-effort cleanup */
@@ -955,74 +962,47 @@ const resolveMergedImageParts = async (
 
 
 const collectImagePartsFromSingleMessage = async (
+  client: any,
   msg: Message,
   out: AIContentPart[],
 ): Promise<void> => {
-  if (!msg.media || !msg.client) return;
+  const media: any = (msg as any)?.media;
+  if (!media) return;
 
-  if (msg.media && (msg as any).photo) {
-    const downloaded = await msg.client.downloadMedia(msg);
-    const buffer = await normalizeDownloadedMedia(downloaded);
-    if (!buffer) return;
-    const dataUrl = `data:image/jpeg;base64,${buffer.toString("base64")}`;
-    out.push({ type: "image_url", image_url: { url: dataUrl } });
+  const download = async (location: any): Promise<Buffer | null> => {
+    if (!location) return null;
+    try {
+      return await normalizeDownloadedMedia(await client.downloadAsBuffer(location));
+    } catch { return null; }
+  };
+
+  if (media.type === "photo") {
+    const buffer = await download(media);
+    if (buffer) out.push({ type: "image_url", image_url: { url: `data:image/jpeg;base64,${buffer.toString("base64")}` } });
     return;
   }
 
-  if (msg.media && msg.media.document) {
-    const doc = msg.media.document;
-    const docMime = doc.mimeType || "";
-    const isAnimated =
-      docMime === "image/gif" ||
-      docMime === "video/webm" ||
-      docMime === "application/x-tgsticker" ||
-      docMime === "application/x-tg-sticker" ||
-      doc.attributes?.some(
-        (attr: any) => attr?._ === "documentAttributeAnimated",
-      );
-
-    const thumb = getDocumentThumb(doc);
-
-    if (!isAnimated && docMime.startsWith("image/")) {
-      const downloaded = await msg.client.downloadMedia(msg);
-      const buffer = await normalizeDownloadedMedia(downloaded);
-      if (!buffer) return;
-      const dataUrl = `data:${docMime};base64,${buffer.toString("base64")}`;
-      out.push({ type: "image_url", image_url: { url: dataUrl } });
-      return;
-    }
-
-    let frameBuffer: Buffer | null = null;
-
-    if (thumb) {
-      const downloaded = await msg.client.downloadMedia(msg, { thumb });
-      const buffer = await normalizeDownloadedMedia(downloaded);
-      if (buffer) {
-        try {
-          frameBuffer = await sharp(buffer).png().toBuffer();
-        } catch {
-          frameBuffer = buffer;
-        }
-      }
-    }
-
-    if (!frameBuffer) {
-      const downloaded = await msg.client.downloadMedia(msg);
-      const buffer = await normalizeDownloadedMedia(downloaded);
-      if (buffer) {
-        try {
-          frameBuffer = await extractFirstFrame(buffer);
-        } catch {
-          frameBuffer = null;
-        }
-      }
-    }
-
-    if (!frameBuffer) return;
-
-    const dataUrl = `data:image/png;base64,${frameBuffer.toString("base64")}`;
-    out.push({ type: "image_url", image_url: { url: dataUrl } });
+  if (media.type !== "document" && media.type !== "video" && media.type !== "sticker") return;
+  const doc: any = media.type === "document" || media.type === "sticker" ? media : media;
+  const mime = String(doc.mimeType || "").toLowerCase();
+  const isAnimated = media.type === "video" || media.type === "sticker" || mime === "image/gif" || mime === "video/webm" || mime.includes("tgsticker");
+  if (!isAnimated && mime.startsWith("image/")) {
+    const buffer = await download(doc);
+    if (buffer) out.push({ type: "image_url", image_url: { url: `data:${mime};base64,${buffer.toString("base64")}` } });
+    return;
   }
+
+  let frameBuffer: Buffer | null = null;
+  const thumb = typeof doc.getThumbnail === "function" ? doc.getThumbnail("m") : null;
+  if (thumb) {
+    const buffer = await download(thumb);
+    if (buffer) { try { frameBuffer = await sharp(buffer).png().toBuffer(); } catch { frameBuffer = buffer; } }
+  }
+  if (!frameBuffer) {
+    const buffer = await download(doc);
+    if (buffer) { try { frameBuffer = await extractFirstFrame(buffer); } catch {} }
+  }
+  if (frameBuffer) out.push({ type: "image_url", image_url: { url: `data:image/png;base64,${frameBuffer.toString("base64")}` } });
 };
 
 const getMessageImageParts = async (
@@ -1035,29 +1015,23 @@ const getMessageImageParts = async (
   const rawGroupedId = (msg as any).groupedId;
   const groupedId = rawGroupedId ? rawGroupedId.toString() : undefined;
 
+  const client = await getNextClient(msg);
   if (!groupedId) {
-    await collectImagePartsFromSingleMessage(msg, parts);
+    await collectImagePartsFromSingleMessage(client, msg, parts);
     return parts;
   }
 
-  const peer = msg.chatId || msg.peerId;
+  const peer = resolveChatId(msg);
   const sameGroupMessages: Message[] = [];
-
-  for await (const m of msg.client.iterMessages(peer, { limit: 50, offsetDate: 0 })) {
-    if (!m || typeof m !== "object") continue;
-
-    const g = (m as any).groupedId;
-    if (!g) continue;
-
-    if (g.toString() !== groupedId) continue;
-
-    sameGroupMessages.push(m);
+  const history = await client.getHistory(peer, { limit: 50 });
+  for (const m of history || []) {
+    if (m && (m as any).groupedId?.toString() === groupedId) sameGroupMessages.push(m);
   }
 
   sameGroupMessages.sort((a, b) => Number(a.id) - Number(b.id));
 
   for (const m of sameGroupMessages) {
-    await collectImagePartsFromSingleMessage(m, parts);
+    await collectImagePartsFromSingleMessage(client, m, parts);
   }
 
   return parts;
@@ -1092,11 +1066,14 @@ const downloadAvatarBufferCompat = async (msg?: Message): Promise<Buffer | null>
   for (const candidate of candidates) {
     for (const isBig of [true, false]) {
       try {
-        const photoBuf = await withTimeout(
-          client.downloadProfilePhoto(candidate, { isBig }),
-          12000,
-        );
-        if (Buffer.isBuffer(photoBuf) && photoBuf.length > 0) return photoBuf;
+        const sender = (msg as any).sender;
+        const photo = sender?.photo;
+        const location = photo?.big ?? photo?.small ?? photo;
+        if (location && typeof client.downloadAsBuffer === "function") {
+          const data = await withTimeout(client.downloadAsBuffer(location), 12000);
+          const photoBuf = data ? (Buffer.isBuffer(data) ? data : Buffer.from(data as Uint8Array)) : null;
+          if (photoBuf?.length) return photoBuf;
+        }
       } catch {}
     }
   }
@@ -1120,15 +1097,12 @@ const getGroupedMessageIds = async (msg: Message): Promise<number[]> => {
   const groupedId = rawGroupedId ? rawGroupedId.toString() : undefined;
   if (!groupedId) return [];
 
-  const peer = msg.chatId || msg.peerId;
+  const peer = resolveChatId(msg);
   const ids: number[] = [];
-
-  for await (const m of msg.client.iterMessages(peer, { limit: 50, offsetDate: 0 })) {
-    if (!m || typeof m !== "object") continue;
-    const g = (m as any).groupedId;
-    if (!g) continue;
-    if (g.toString() !== groupedId) continue;
-    ids.push(Number(m.id));
+  const client = await getNextClient(msg);
+  const history = await client.getHistory(peer, { limit: 50 });
+  for (const m of history || []) {
+    if (m && (m as any).groupedId?.toString() === groupedId) ids.push(Number(m.id));
   }
 
   if (!ids.includes(Number(msg.id))) ids.push(Number(msg.id));
@@ -1138,12 +1112,11 @@ const getGroupedMessageIds = async (msg: Message): Promise<number[]> => {
 
 const deleteMessageOrGroup = async (msg: Message): Promise<void> => {
   try {
-    if (!msg?.client) return;
-    const peer = msg.chatId || msg.peerId;
+    const client = await getNextClient(msg);
+    const peer = resolveChatId(msg);
     const ids = await getGroupedMessageIds(msg);
-
     if (ids.length > 1) {
-      await msg.client.deleteMessages(peer, ids, { revoke: true });
+      await client.deleteMessagesById(peer, ids, { revoke: true });
       return;
     }
     await deleteMessageCompat(msg);
@@ -1460,13 +1433,8 @@ const shouldFallbackToReplyOnEditError = (error: any): boolean => {
   );
 };
 
-const getTopicRootId = (msg: Message): number | undefined => {
-  const typedMsg = msg as Message & {
-    replyTo?: { replyToTopId?: number; replyToMsgId?: number };
-    replyToMsgId?: number;
-  };
-  return typedMsg.replyTo?.replyToTopId ?? typedMsg.replyTo?.replyToMsgId ?? typedMsg.replyToMsgId;
-};
+  const getReplyId = (m: any): number | undefined => m?.replyToMessage?.id ?? m?.replyTo?.replyToMsgId ?? m?.replyToMsgId;
+  const getTopicRootId = (msg: Message): number | undefined => getReplyId(msg);
 
 class MessageSender {
   static async sendOrEdit(
@@ -1474,23 +1442,19 @@ class MessageSender {
     text: string,
     options?: MessageOptions,
   ): Promise<Message> {
+    const client = await getNextClient(msg);
+    const peer = resolveChatId(msg);
+    const replyTo = getTopicRootId(msg);
     try {
-      const edited = await msg.edit({ text, ...options });
-      if (edited) return edited;
+      if (msg?.id && typeof client.editMessage === "function") {
+        const edited = await client.editMessage({ chatId: peer, message: msg.id, text, ...options });
+        if (edited) return edited;
+      }
     } catch (error: any) {
-      if (isMessageNotModifiedError(error)) {
-        return msg;
-      }
-      if (shouldFallbackToReplyOnEditError(error)) {
-        const replied = await msg.reply({ message: text, ...options });
-        if (replied) return replied;
-      }
-      throw error;
+      if (isMessageNotModifiedError(error)) return msg;
+      if (!shouldFallbackToReplyOnEditError(error)) throw error;
     }
-
-    const replied = await msg.reply({ message: text, ...options });
-    if (replied) return replied;
-    throw new Error("消息发送失败");
+    return await client.sendText(peer, text, { ...(options || {}), ...(replyTo ? { replyTo } : {}) });
   }
 
   static async sendNew(
@@ -1504,7 +1468,7 @@ class MessageSender {
     const topicRootId = getTopicRootId(msg);
     const replyTo = replyToId ?? topicRootId;
     return await client.sendText(
-      msg.chatId || msg.peerId,
+      resolveChatId(msg),
       text,
       {
         ...(options || {}),
@@ -1725,7 +1689,7 @@ class MessageUtils {
   ): Promise<void> {
     if (!mediaItems.length) return;
 
-    const peerId = msg.chatId || msg.peerId;
+    const peerId = resolveChatId(msg);
     const promptText = htmlEscape(prompt);
     const promptBlock = options.collapse
       ? `<blockquote expandable>${promptText}</blockquote>`
@@ -1762,13 +1726,9 @@ class MessageUtils {
           const client = await getNextClient(msg);
           const topicRootId = getTopicRootId(msg);
           const replyTo = replyToId ?? topicRootId;
-          await client.sendFile(peerId, {
-            file: pathsToSend,
-            forceDocument: false,
-            caption,
-            parseMode: "html",
-            ...(replyTo ? { replyTo } : {}),
-          });
+          await client.sendMediaGroup(peerId, pathsToSend.map((file, index) => ({
+            type: "photo", file, ...(index === 0 ? { caption } : {}),
+          })), { ...(replyTo ? { replyTo } : {}) });
           return;
         }
       } catch (error) {
@@ -1802,13 +1762,11 @@ class MessageUtils {
 
         const topicRootId = getTopicRootId(msg);
         const replyTo = replyToId ?? topicRootId;
-        await client.sendFile(peerId, {
+        await client.sendMedia(peerId, {
+          type: !options.previewEnabled ? "document" : options.directory === "videos" ? "video" : "photo",
           file: pathToSend,
-          forceDocument: !options.previewEnabled,
           caption,
-          parseMode: "html",
-          ...(replyTo ? { replyTo } : {}),
-        });
+        }, { ...(replyTo ? { replyTo } : {}) });
       } finally {
         const cleanupTargets = options.prepareForSend
           ? [rawPath, finalPath]
@@ -6235,7 +6193,7 @@ class AIXPlugin extends Plugin {
 
   listenMessageHandler = async (msg: Message): Promise<void> => {
     try {
-      if (!msg.out) return;
+      if (!msg.isOutgoing) return;
       const text = getMessageText(msg).trim();
       const prefixes = getPrefixes();
       if (prefixes.some((p) => text.startsWith(`${p}aix`))) return;
