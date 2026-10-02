@@ -1,5 +1,8 @@
 import { Plugin } from "@utils/pluginBase";
-import { Api } from "teleproto";
+type Message = any;
+const MessageMediaPhoto = Symbol("MessageMediaPhoto");
+const MessageMediaDocument = Symbol("MessageMediaDocument");
+const anyAttributeAnimated = Symbol("DocumentAttributeAnimated");
 import { getPrefixes } from "@utils/pluginManager";
 import type { Low } from "lowdb";
 import { JSONFilePreset } from "lowdb/node";
@@ -257,7 +260,7 @@ interface FeatureHandler {
   readonly name: string;
   readonly command: string;
   readonly description: string;
-  execute(msg: Api.Message, args: string[], prefixes: string[]): Promise<void>;
+  execute(msg: Message, args: string[], prefixes: string[]): Promise<void>;
 }
 
 interface Middleware {
@@ -651,7 +654,7 @@ const resolveResponsesEndpointUrl = (
   return resolveEndpointUrl(responsesBaseUrl, "responses");
 };
 
-const getMessageText = (m?: Api.Message | null): string => {
+const getMessageText = (m?: Message | null): string => {
   if (!m) return "";
   const text = (m as any).message ?? (m as any).text ?? "";
   return typeof text === "string" ? text : "";
@@ -772,7 +775,7 @@ const formatErrorForDisplay = (error: any): string => {
 };
 
 const sendProcessing = async (
-  msg: Api.Message,
+  msg: Message,
   kind: ProcessingKind,
 ): Promise<void> => {
   await MessageSender.sendOrEdit(msg, PROCESSING_TEXT[kind], {
@@ -781,9 +784,9 @@ const sendProcessing = async (
 };
 
 const sendErrorMessage = async (
-  msg: Api.Message,
+  msg: Message,
   error: any,
-  trigger?: Api.Message,
+  trigger?: Message,
 ): Promise<void> => {
   if (extractErrorMessage(error) === "__AIX_SILENT_CANCEL__") return;
   await MessageSender.sendOrEdit(trigger || msg, formatErrorForDisplay(error), {
@@ -833,7 +836,7 @@ const extractFirstFrame = async (buffer: Buffer): Promise<Buffer | null> => {
   }
 };
 
-const getDocumentThumb = (doc: Api.Document): Api.TypePhotoSize | undefined => {
+const getDocumentThumb = (doc: any): any | undefined => {
   const thumbs = doc.thumbs || [];
   if (thumbs.length === 0) return undefined;
   return thumbs[thumbs.length - 1];
@@ -933,12 +936,12 @@ const resolveMergedImageParts = async (
 
 
 const collectImagePartsFromSingleMessage = async (
-  msg: Api.Message,
+  msg: Message,
   out: AIContentPart[],
 ): Promise<void> => {
   if (!msg.media || !msg.client) return;
 
-  if (msg.media instanceof Api.MessageMediaPhoto) {
+  if (msg.media && (msg as any).photo) {
     const downloaded = await msg.client.downloadMedia(msg);
     const buffer = await normalizeDownloadedMedia(downloaded);
     if (!buffer) return;
@@ -947,10 +950,7 @@ const collectImagePartsFromSingleMessage = async (
     return;
   }
 
-  if (
-    msg.media instanceof Api.MessageMediaDocument &&
-    msg.media.document instanceof Api.Document
-  ) {
+  if (msg.media && msg.media.document) {
     const doc = msg.media.document;
     const docMime = doc.mimeType || "";
     const isAnimated =
@@ -959,7 +959,7 @@ const collectImagePartsFromSingleMessage = async (
       docMime === "application/x-tgsticker" ||
       docMime === "application/x-tg-sticker" ||
       doc.attributes?.some(
-        (attr) => attr instanceof Api.DocumentAttributeAnimated,
+        (attr: any) => attr?._ === "documentAttributeAnimated",
       );
 
     const thumb = getDocumentThumb(doc);
@@ -1007,7 +1007,7 @@ const collectImagePartsFromSingleMessage = async (
 };
 
 const getMessageImageParts = async (
-  msg?: Api.Message,
+  msg?: Message,
 ): Promise<AIContentPart[]> => {
   if (!msg?.client) return [];
 
@@ -1022,10 +1022,10 @@ const getMessageImageParts = async (
   }
 
   const peer = msg.chatId || msg.peerId;
-  const sameGroupMessages: Api.Message[] = [];
+  const sameGroupMessages: Message[] = [];
 
   for await (const m of msg.client.iterMessages(peer, { limit: 50, offsetDate: 0 })) {
-    if (!(m instanceof Api.Message)) continue;
+    if (!m || typeof m !== "object") continue;
 
     const g = (m as any).groupedId;
     if (!g) continue;
@@ -1051,7 +1051,7 @@ const withTimeout = async <T>(promise: Promise<T>, ms: number): Promise<T | null
   ]);
 };
 
-const downloadAvatarBufferCompat = async (msg?: Api.Message): Promise<Buffer | null> => {
+const downloadAvatarBufferCompat = async (msg?: Message): Promise<Buffer | null> => {
   if (!msg?.client) return null;
   const client = msg.client;
   const candidates: any[] = [];
@@ -1085,7 +1085,7 @@ const downloadAvatarBufferCompat = async (msg?: Api.Message): Promise<Buffer | n
 };
 
 const getAvatarImagePartFromMessageSender = async (
-  msg?: Api.Message,
+  msg?: Message,
 ): Promise<AIContentPart | null> => {
   const photoBuf = await downloadAvatarBufferCompat(msg);
   if (!photoBuf) return null;
@@ -1095,7 +1095,7 @@ const getAvatarImagePartFromMessageSender = async (
   };
 };
 
-const getGroupedMessageIds = async (msg: Api.Message): Promise<number[]> => {
+const getGroupedMessageIds = async (msg: Message): Promise<number[]> => {
   if (!msg?.client) return [];
   const rawGroupedId = (msg as any).groupedId;
   const groupedId = rawGroupedId ? rawGroupedId.toString() : undefined;
@@ -1105,7 +1105,7 @@ const getGroupedMessageIds = async (msg: Api.Message): Promise<number[]> => {
   const ids: number[] = [];
 
   for await (const m of msg.client.iterMessages(peer, { limit: 50, offsetDate: 0 })) {
-    if (!(m instanceof Api.Message)) continue;
+    if (!m || typeof m !== "object") continue;
     const g = (m as any).groupedId;
     if (!g) continue;
     if (g.toString() !== groupedId) continue;
@@ -1117,7 +1117,7 @@ const getGroupedMessageIds = async (msg: Api.Message): Promise<number[]> => {
   return Array.from(new Set(ids)).sort((a, b) => a - b);
 };
 
-const deleteMessageOrGroup = async (msg: Api.Message): Promise<void> => {
+const deleteMessageOrGroup = async (msg: Message): Promise<void> => {
   try {
     if (!msg?.client) return;
     const peer = msg.chatId || msg.peerId;
@@ -1131,7 +1131,7 @@ const deleteMessageOrGroup = async (msg: Api.Message): Promise<void> => {
   } catch {}
 };
 
-const scheduleDeleteMessage = (msg: Api.Message | undefined, delayMs: number): void => {
+const scheduleDeleteMessage = (msg: Message | undefined, delayMs: number): void => {
   if (!msg || delayMs <= 0) return;
   setTimeout(() => {
     void msg.delete().catch(() => {});
@@ -1139,10 +1139,10 @@ const scheduleDeleteMessage = (msg: Api.Message | undefined, delayMs: number): v
 };
 
 const replaceStatusMessage = async (
-  current: Api.Message | undefined,
-  msg: Api.Message,
+  current: Message | undefined,
+  msg: Message,
   text: string,
-): Promise<Api.Message> => {
+): Promise<Message> => {
   if (current) {
     await current.delete().catch(() => {});
   }
@@ -1441,8 +1441,8 @@ const shouldFallbackToReplyOnEditError = (error: any): boolean => {
   );
 };
 
-const getTopicRootId = (msg: Api.Message): number | undefined => {
-  const typedMsg = msg as Api.Message & {
+const getTopicRootId = (msg: Message): number | undefined => {
+  const typedMsg = msg as Message & {
     replyTo?: { replyToTopId?: number; replyToMsgId?: number };
     replyToMsgId?: number;
   };
@@ -1451,10 +1451,10 @@ const getTopicRootId = (msg: Api.Message): number | undefined => {
 
 class MessageSender {
   static async sendOrEdit(
-    msg: Api.Message,
+    msg: Message,
     text: string,
     options?: MessageOptions,
-  ): Promise<Api.Message> {
+  ): Promise<Message> {
     try {
       const edited = await msg.edit({ text, ...options });
       if (edited) return edited;
@@ -1475,11 +1475,11 @@ class MessageSender {
   }
 
   static async sendNew(
-    msg: Api.Message,
+    msg: Message,
     text: string,
     options?: MessageOptions,
     replyToId?: number,
-  ): Promise<Api.Message> {
+  ): Promise<Message> {
     if (!msg.client) {
       throw new Error("客户端未初始化");
     }
@@ -1543,12 +1543,12 @@ class MessageUtils {
   }
 
   async sendLongMessage(
-    msg: Api.Message,
+    msg: Message,
     text: string,
     replyToId?: number,
     token?: AbortToken,
     options?: { poweredByTag?: string },
-  ): Promise<Api.Message> {
+  ): Promise<Message> {
     token?.throwIfAborted();
 
     const configManager = await this.configManagerPromise;
@@ -1640,7 +1640,7 @@ class MessageUtils {
   }
 
   async sendImages(
-    msg: Api.Message,
+    msg: Message,
     images: AIImage[],
     prompt: string,
     replyToId?: number,
@@ -1660,7 +1660,7 @@ class MessageUtils {
   }
 
   async sendVideos(
-    msg: Api.Message,
+    msg: Message,
     videos: AIVideo[],
     prompt: string,
     replyToId?: number,
@@ -1683,7 +1683,7 @@ class MessageUtils {
   }
 
   private async sendMedia<T extends AIImage | AIVideo>(
-    msg: Api.Message,
+    msg: Message,
     mediaItems: T[],
     prompt: string,
     replyToId: number | undefined,
@@ -1842,11 +1842,11 @@ class MessageUtils {
   }
 
   private async sendHtml(
-    msg: Api.Message,
+    msg: Message,
     html: string,
     replyToId?: number,
     linkPreview?: boolean,
-  ): Promise<Api.Message> {
+  ): Promise<Message> {
     return await MessageSender.sendNew(
       msg,
       html,
@@ -4159,7 +4159,7 @@ abstract class BaseFeatureHandler implements FeatureHandler {
   abstract readonly command: string;
   abstract readonly description: string;
   abstract execute(
-    msg: Api.Message,
+    msg: Message,
     args: string[],
     prefixes: string[],
   ): Promise<void>;
@@ -4180,7 +4180,7 @@ abstract class BaseFeatureHandler implements FeatureHandler {
   }
 
   protected async editMessage(
-    msg: Api.Message,
+    msg: Message,
     text: string,
     parseMode: string = "html",
   ): Promise<void> {
@@ -4198,7 +4198,7 @@ class ConfigFeature extends BaseFeatureHandler {
   }
 
   async execute(
-    msg: Api.Message,
+    msg: Message,
     args: string[],
     _prefixes: string[],
   ): Promise<void> {
@@ -4305,7 +4305,7 @@ class ConfigFeature extends BaseFeatureHandler {
   }
 
   private async addConfig(
-    msg: Api.Message,
+    msg: Message,
     args: string[],
     configManager: ConfigManager,
   ): Promise<void> {
@@ -4342,7 +4342,7 @@ class ConfigFeature extends BaseFeatureHandler {
   }
 
   private async setStream(
-    msg: Api.Message,
+    msg: Message,
     args: string[],
     configManager: ConfigManager,
   ): Promise<void> {
@@ -4366,7 +4366,7 @@ class ConfigFeature extends BaseFeatureHandler {
   }
 
   private async setResponses(
-    msg: Api.Message,
+    msg: Message,
     args: string[],
     configManager: ConfigManager,
   ): Promise<void> {
@@ -4390,7 +4390,7 @@ class ConfigFeature extends BaseFeatureHandler {
   }
 
   private async setProviderType(
-    msg: Api.Message,
+    msg: Message,
     args: string[],
     configManager: ConfigManager,
   ): Promise<void> {
@@ -4412,7 +4412,7 @@ class ConfigFeature extends BaseFeatureHandler {
   }
 
   private async deleteConfig(
-    msg: Api.Message,
+    msg: Message,
     args: string[],
     configManager: ConfigManager,
   ): Promise<void> {
@@ -4455,7 +4455,7 @@ class ModelFeature extends BaseFeatureHandler {
   }
 
   async execute(
-    msg: Api.Message,
+    msg: Message,
     args: string[],
     _prefixes: string[],
   ): Promise<void> {
@@ -4601,7 +4601,7 @@ class PromptFeature extends BaseFeatureHandler {
   }
 
   async execute(
-    msg: Api.Message,
+    msg: Message,
     args: string[],
     _prefixes: string[],
   ): Promise<void> {
@@ -4695,7 +4695,7 @@ class CollapseFeature extends BaseFeatureHandler {
   }
 
   async execute(
-    msg: Api.Message,
+    msg: Message,
     args: string[],
     _prefixes: string[],
   ): Promise<void> {
@@ -4734,7 +4734,7 @@ class TelegraphFeature extends BaseFeatureHandler {
   }
 
   async execute(
-    msg: Api.Message,
+    msg: Message,
     args: string[],
     _prefixes: string[],
   ): Promise<void> {
@@ -4769,7 +4769,7 @@ class TelegraphFeature extends BaseFeatureHandler {
   }
 
   private async showTelegraphStatus(
-    msg: Api.Message,
+    msg: Message,
     config: DB,
   ): Promise<void> {
     let status =
@@ -4789,7 +4789,7 @@ class TelegraphFeature extends BaseFeatureHandler {
   }
 
   private async enableTelegraph(
-    msg: Api.Message,
+    msg: Message,
     configManager: ConfigManager,
   ): Promise<void> {
     await configManager.updateConfig((cfg) => {
@@ -4799,7 +4799,7 @@ class TelegraphFeature extends BaseFeatureHandler {
   }
 
   private async disableTelegraph(
-    msg: Api.Message,
+    msg: Message,
     configManager: ConfigManager,
   ): Promise<void> {
     await configManager.updateConfig((cfg) => {
@@ -4809,7 +4809,7 @@ class TelegraphFeature extends BaseFeatureHandler {
   }
 
   private async setTelegraphLimit(
-    msg: Api.Message,
+    msg: Message,
     args: string[],
     configManager: ConfigManager,
   ): Promise<void> {
@@ -4824,7 +4824,7 @@ class TelegraphFeature extends BaseFeatureHandler {
   }
 
   private async deleteTelegraphItem(
-    msg: Api.Message,
+    msg: Message,
     args: string[],
     configManager: ConfigManager,
   ): Promise<void> {
@@ -4863,7 +4863,7 @@ class TimeoutFeature extends BaseFeatureHandler {
   }
 
   async execute(
-    msg: Api.Message,
+    msg: Message,
     args: string[],
     _prefixes: string[],
   ): Promise<void> {
@@ -4918,9 +4918,9 @@ class QuestionFeature extends BaseFeatureHandler {
   }
 
   private async runQuestion(
-    msg: Api.Message,
+    msg: Message,
     question: string,
-    trigger?: Api.Message,
+    trigger?: Message,
   ): Promise<void> {
     this.cancelCurrentOperation();
 
@@ -4936,7 +4936,7 @@ class QuestionFeature extends BaseFeatureHandler {
   }
 
   async execute(
-    msg: Api.Message,
+    msg: Message,
     args: string[],
     _prefixes: string[],
   ): Promise<void> {
@@ -4944,7 +4944,7 @@ class QuestionFeature extends BaseFeatureHandler {
     await this.runQuestion(msg, question);
   }
 
-  async askFromReply(msg: Api.Message, trigger?: Api.Message): Promise<void> {
+  async askFromReply(msg: Message, trigger?: Message): Promise<void> {
     const replyMsg = await safeGetReplyMessage(msg);
     requireUser(!!replyMsg, "至少需要一条提示");
     const question = getMessageText(replyMsg).trim();
@@ -4952,9 +4952,9 @@ class QuestionFeature extends BaseFeatureHandler {
   }
 
   async handleQuestion(
-    msg: Api.Message,
+    msg: Message,
     question: string,
-    trigger?: Api.Message,
+    trigger?: Message,
     token?: AbortToken,
   ): Promise<void> {
     const config = await this.getConfig();
@@ -5044,7 +5044,7 @@ class QuestionFeature extends BaseFeatureHandler {
   }
 
   private async handleLongContentWithTelegraph(
-    msg: Api.Message,
+    msg: Message,
     question: string,
     rawAnswer: string,
     replyToId?: number,
@@ -5103,7 +5103,7 @@ class SearchFeature extends BaseFeatureHandler {
   }
 
   async execute(
-    msg: Api.Message,
+    msg: Message,
     args: string[],
     _prefixes: string[],
   ): Promise<void> {
@@ -5407,14 +5407,14 @@ class ImageFeature extends BaseFeatureHandler {
     return { prompt: kept.join(" ").trim(), count: Math.max(1, count || 1) };
   }
 
-  private async getReplyAvatarImagePart(replyMsg?: Api.Message): Promise<AIContentPart | null> {
+  private async getReplyAvatarImagePart(replyMsg?: Message): Promise<AIContentPart | null> {
     const photoBuf = await downloadAvatarBufferCompat(replyMsg);
     if (!photoBuf) return null;
     return { type: "image_url", image_url: { url: `data:image/jpeg;base64,${photoBuf.toString("base64")}` } };
   }
 
   async execute(
-    msg: Api.Message,
+    msg: Message,
     args: string[],
     _prefixes: string[],
   ): Promise<void> {
@@ -5535,7 +5535,7 @@ class ImageFeature extends BaseFeatureHandler {
 
     const token = this.aiService.createAbortToken();
     let imageGenerationDone = false;
-    let generationStatusMsg: Api.Message | undefined;
+    let generationStatusMsg: Message | undefined;
     let imagePhaseTimeoutId: ReturnType<typeof setTimeout> | undefined;
 
     try {
@@ -5817,12 +5817,12 @@ class VideoFeature extends BaseFeatureHandler {
     return { args, forceAvatar: false };
   }
 
-  private async getReplyAvatarImagePart(replyMsg?: Api.Message): Promise<AIContentPart | null> {
+  private async getReplyAvatarImagePart(replyMsg?: Message): Promise<AIContentPart | null> {
     return await getAvatarImagePartFromMessageSender(replyMsg);
   }
 
   async execute(
-    msg: Api.Message,
+    msg: Message,
     args: string[],
     _prefixes: string[],
   ): Promise<void> {
@@ -5959,7 +5959,7 @@ class VideoFeature extends BaseFeatureHandler {
 
     const token = this.aiService.createAbortToken();
     let videoPhaseTimeoutId: ReturnType<typeof setTimeout> | undefined;
-    let generationStatusMsg: Api.Message | undefined;
+    let generationStatusMsg: Message | undefined;
     generationStatusMsg = await MessageSender.sendOrEdit(msg, PROCESSING_TEXT.video, {
       parseMode: "html",
     });
@@ -6215,7 +6215,7 @@ class AIXPlugin extends Plugin {
     return `<blockquote expandable>${baseDescription}</blockquote>`;
   };
 
-  listenMessageHandler = async (msg: Api.Message): Promise<void> => {
+  listenMessageHandler = async (msg: Message): Promise<void> => {
     try {
       if (!msg.out) return;
       const text = getMessageText(msg).trim();
@@ -6228,9 +6228,9 @@ class AIXPlugin extends Plugin {
 
   cmdHandlers: Record<
     string,
-    (msg: Api.Message, trigger?: Api.Message) => Promise<void>
+    (msg: Message, trigger?: Message) => Promise<void>
   > = {
-    aix: async (msg: Api.Message, trigger?: Api.Message) => {
+    aix: async (msg: Message, trigger?: Message) => {
       try {
         const prefixes = getPrefixes();
         const args = getMessageText(msg).trim().split(/\s+/).slice(1);
