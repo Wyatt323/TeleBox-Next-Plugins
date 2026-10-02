@@ -5,6 +5,20 @@ type Message = any;
 /** Resolve the active Next runtime client, with message-local client fallback. */
 const getNextClient = async (msg?: Message): Promise<any> =>
   msg?.client ?? (await getGlobalClient());
+
+/** Next messages are plain objects; deletion is a client operation. */
+const deleteMessageCompat = async (msg: Message): Promise<void> => {
+  try {
+    const client = await getNextClient(msg);
+    const peer = msg?.chatId ?? msg?.peerId;
+    const id = Number(msg?.id);
+    if (peer != null && Number.isFinite(id) && typeof client.deleteMessages === "function") {
+      await client.deleteMessages(peer, [id], { revoke: true });
+    }
+  } catch {
+    /* best-effort cleanup */
+  }
+};
 const MessageMediaPhoto = Symbol("MessageMediaPhoto");
 const MessageMediaDocument = Symbol("MessageMediaDocument");
 const anyAttributeAnimated = Symbol("DocumentAttributeAnimated");
@@ -1132,14 +1146,14 @@ const deleteMessageOrGroup = async (msg: Message): Promise<void> => {
       await msg.client.deleteMessages(peer, ids, { revoke: true });
       return;
     }
-    await msg.delete();
+    await deleteMessageCompat(msg);
   } catch {}
 };
 
 const scheduleDeleteMessage = (msg: Message | undefined, delayMs: number): void => {
   if (!msg || delayMs <= 0) return;
   setTimeout(() => {
-    void msg.delete().catch(() => {});
+    void deleteMessageCompat(msg);
   }, delayMs);
 };
 
@@ -1149,7 +1163,7 @@ const replaceStatusMessage = async (
   text: string,
 ): Promise<Message> => {
   if (current) {
-    await current.delete().catch(() => {});
+    await deleteMessageCompat(current);
   }
   return MessageSender.sendOrEdit(msg, text, { parseMode: "html" });
 };
@@ -1489,7 +1503,7 @@ class MessageSender {
 
     const topicRootId = getTopicRootId(msg);
     const replyTo = replyToId ?? topicRootId;
-    return await client.sendMessage(msg.chatId || msg.peerId, {
+    return await client.sendText(msg.chatId || msg.peerId, {
       message: text,
       ...(options || {}),
       ...(replyTo ? { replyTo } : {}),
