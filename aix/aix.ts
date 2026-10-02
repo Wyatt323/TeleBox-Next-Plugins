@@ -1061,7 +1061,7 @@ const downloadAvatarBufferCompat = async (msg?: Message): Promise<Buffer | null>
     candidates.push(value);
   };
 
-  // senderId/fromId 让 teleproto 重新解析；sender 对象作为兜底，兼容不同消息来源。
+  // senderId/fromId 用于兼容不同消息来源；sender 对象作为兜底。
   pushCandidate((msg as any).senderId);
   pushCandidate(msg.fromId);
   try {
