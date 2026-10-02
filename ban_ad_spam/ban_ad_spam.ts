@@ -31,11 +31,8 @@ class BanAdSpamNext extends Plugin {
   private key(chatId: any, messageId: number): string { return `${String(chatId)}:${messageId}`; }
   private async approvals(vote: Vote): Promise<number> {
     const client: any = await getGlobalClient();
-    if (typeof client.getMessageReactions !== "function") return 0;
-    const result = await client.getMessageReactions(vote.chatId, vote.voteId);
-    const reactions = result?.reactions || result?.results || [];
-    const item = reactions.find((r: any) => String(r?.reaction?.emoticon || r?.reaction || "") === APPROVAL);
-    return Number(item?.count || item?.total || 0);
+    const result = await client.getReactionUsers({ chatId: vote.chatId, message: vote.voteId, emoji: APPROVAL, limit: 100 });
+    return Number(result?.total || result?.length || 0);
   }
 
   eventHandlers = [{
