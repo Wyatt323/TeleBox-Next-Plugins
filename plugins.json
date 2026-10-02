@@ -10,5 +10,13 @@
   "yvlux": {
     "url": "https://github.com/Wyatt323/TeleBox-Next-Plugins/blob/main/yvlux/yvlux.ts?raw=true",
     "desc": "语录贴纸生成，命令为 .yvlux"
+  },
+  "aix": {
+    "url": "https://github.com/Wyatt323/TeleBox-Next-Plugins/blob/main/aix/aix.ts?raw=true",
+    "desc": "AI 图片/视频生成、编辑及提示词规则"
+  },
+  "stsave": {
+    "url": "https://github.com/Wyatt323/TeleBox-Next-Plugins/blob/main/stsave/stsave.ts?raw=true",
+    "desc": "保存贴纸、图片、GIF 或视频到贴纸包"
   }
 }
