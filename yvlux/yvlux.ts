@@ -343,7 +343,7 @@ const resolveForwardSenderFromHeader = async (
 const prefixes = getPrefixes();
 const mainPrefix = prefixes[0];
 
-const pluginName = "yvluxx";
+const pluginName = "yvlux";
 
 const commandName = `${mainPrefix}${pluginName}`;
 
@@ -732,7 +732,7 @@ class YvluxPlugin extends Plugin {
 
   async onLoad() {
     // 使用 assets 目录存储配置文件
-    const configDir = createDirectoryInAssets("yvlux");
+    const configDir = createDirectoryInAssets("yvlux", ["yvlu"]);
     this.configPath = path.join(configDir, "config.json");
 
     logger.info(`yvlux配置文件路径: ${this.configPath}`);
@@ -760,7 +760,7 @@ class YvluxPlugin extends Plugin {
     try {
       // 确保 configPath 已初始化
       if (!this.configPath || this.configPath === "") {
-        const configDir = createDirectoryInAssets("yvlux");
+        const configDir = createDirectoryInAssets("yvlux", ["yvlu"]);
         this.configPath = path.join(configDir, "config.json");
         logger.info(`重新初始化配置文件路径: ${this.configPath}`);
       }
@@ -1500,7 +1500,7 @@ ${codeTag(this.configPath)}
     try {
       // 确保配置路径已初始化
       if (!this.configPath || this.configPath === "") {
-        const configDir = createDirectoryInAssets("yvlux");
+        const configDir = createDirectoryInAssets("yvlux", ["yvlu"]);
         this.configPath = path.join(configDir, "config.json");
 
         // 如果配置文件不存在,创建默认配置
