@@ -41,11 +41,16 @@ function errorText(e: any): string { const s = String(e?.errorMessage || e?.mess
 function mediaKind(msg: any): Kind | "image" {
   const media = msg?.media;
   const type = String(media?.type || "").toLowerCase();
-  const doc = media?.document || msg?.document || (type === "document" ? media : undefined);
-  const mime = String(doc?.mimeType || doc?.mime_type || media?.mimeType || "").toLowerCase();
-  if (msg?.sticker || type === "sticker") { if (mime.includes("tgsticker")) return "animated"; if (mime === "video/webm") return "video"; return "static"; }
-  if (type === "photo" || msg?.photo || mime.startsWith("image/") && mime !== "image/gif") return "image";
+  const doc = media?.document || (type === "document" || type === "sticker" ? media : undefined);
+  const mime = String(doc?.mimeType || media?.mimeType || "").toLowerCase();
+  if (type === "sticker" || msg?.sticker) {
+    if (mime === "application/x-tgsticker" || mime === "application/x-tgs") return "animated";
+    if (mime === "video/webm") return "video";
+    return "static";
+  }
+  if (type === "photo") return "image";
   if (type === "video" || type === "animation" || mime.startsWith("video/") || mime === "image/gif") return "video";
+  if (type === "document" && mime.startsWith("image/")) return "image";
   throw new Error("请回复贴纸、图片、GIF 或视频");
 }
 function rawOf(value: any): any { return value?.raw || value; }
@@ -66,7 +71,13 @@ async function uploadSticker(client: AnyClient, data: Buffer, kind: "static" | "
   const sent = await client.sendMedia("me", { type: "document", file: data, fileName: `sticker.${ext}`, mimeType: kind === "static" ? "image/webp" : "video/webm", attributes: [{ _: "documentAttributeSticker", alt: emoji, stickerset: { _: "inputStickerSetEmpty" } }] });
   const doc = sent?.media?.document || sent?.media;
   if (!doc) throw new Error("上传转换后的贴纸失败");
-  try { if (typeof sent?.delete === "function") await sent.delete({ revoke: true }); } catch {}
+  try {
+    const peer = sent?.chat ?? "me";
+    const id = sent?.id;
+    if (id && typeof client.deleteMessagesById === "function") {
+      await client.deleteMessagesById(peer, [id], { revoke: true });
+    }
+  } catch {}
   return inputDocument(doc);
 }
 
