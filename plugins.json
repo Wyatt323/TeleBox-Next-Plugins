@@ -1,0 +1,14 @@
+{
+  "ban_ad_spam": {
+    "url": "https://github.com/Wyatt323/TeleBox-Next-Plugins/blob/main/ban_ad_spam/ban_ad_spam.ts?raw=true",
+    "desc": "通过 👍 reaction 发起 5 分钟、3 人 Ban 投票，达到 3 票后回复 /spam"
+  },
+  "tj": {
+    "url": "https://github.com/Wyatt323/TeleBox-Next-Plugins/blob/main/tj/tj.ts?raw=true",
+    "desc": "统计指定消息的全部回复"
+  },
+  "yvlux": {
+    "url": "https://github.com/Wyatt323/TeleBox-Next-Plugins/blob/main/yvlux/yvlux.ts?raw=true",
+    "desc": "语录贴纸生成，命令为 .yvlux"
+  }
+}
