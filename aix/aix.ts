@@ -1503,11 +1503,14 @@ class MessageSender {
 
     const topicRootId = getTopicRootId(msg);
     const replyTo = replyToId ?? topicRootId;
-    return await client.sendText(msg.chatId || msg.peerId, {
-      message: text,
-      ...(options || {}),
-      ...(replyTo ? { replyTo } : {}),
-    });
+    return await client.sendText(
+      msg.chatId || msg.peerId,
+      text,
+      {
+        ...(options || {}),
+        ...(replyTo ? { replyTo } : {}),
+      },
+    );
   }
 }
 
